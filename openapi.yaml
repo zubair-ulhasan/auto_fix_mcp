@@ -1,0 +1,325 @@
+openapi: 3.0.3
+info:
+  title: auto_fix_mcp test API
+  version: "1.0.0"
+  description: >
+    Deliberately vulnerable test API used to validate PerfAI's scan/report
+    pipeline before connecting the MCP auto-fix tool. See
+    VULNERABILITIES.md in the repo for the planted issues and how each one
+    maps to the endpoints below. Seed accounts: alice/alice123 (role
+    user), bob/bob123 (role user), admin/admin123 (role admin).
+servers:
+  - url: https://auto-fix-mcp.onrender.com
+    description: Live (Render)
+  - url: http://localhost:3000
+    description: Local
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Token is unsigned (base64 of the user id, no expiry, no
+        signature) and is intentionally forgeable. See "Broken
+        Authentication" in VULNERABILITIES.md.
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+          description: Stored and returned in plaintext (intentional vulnerability).
+        role:
+          type: string
+          enum: [user, admin]
+
+    Note:
+      type: object
+      properties:
+        id:
+          type: string
+        ownerId:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        isPrivate:
+          type: boolean
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+
+    NoteCreateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+        isPrivate:
+          type: boolean
+
+    NoteUpdateRequest:
+      type: object
+      description: >
+        No field allow-list is enforced server-side (Mass Assignment) —
+        any property, including ownerId or isPrivate, is accepted and
+        written directly to the stored note.
+      additionalProperties: true
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+paths:
+  /health:
+    get:
+      summary: Liveness check
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  /login:
+    post:
+      summary: Authenticate and receive a bearer token
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /logout:
+    get:
+      summary: Logout (no-op)
+      operationId: logout
+      responses:
+        "200":
+          description: Always succeeds
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /notes:
+    get:
+      summary: List the current user's notes
+      operationId: listNotes
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: >
+            Returns raw note objects including internal fields such as
+            ownerId (Excessive Data Exposure).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Note"
+        "401":
+          description: Missing/invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create a note for the current user
+      operationId: createNote
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NoteCreateRequest"
+      responses:
+        "201":
+          description: Note created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "401":
+          description: Missing/invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /notes/{id}:
+    get:
+      summary: Fetch a note by id
+      operationId: getNoteById
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >
+            Returns the note with no ownership check against the
+            requesting user (BOLA / IDOR).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "401":
+          description: Missing/invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Note not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Update a note by id
+      operationId: updateNoteById
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NoteUpdateRequest"
+      responses:
+        "200":
+          description: Updated note (Mass Assignment — see schema description above)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "401":
+          description: Missing/invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Note not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /admin/users:
+    get:
+      summary: List all users
+      operationId: listUsers
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: >
+            Returns all users including plaintext passwords, with no
+            check that the caller has the admin role (Broken
+            Function-Level Authorization + Excessive Data Exposure).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+        "401":
+          description: Missing/invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /admin/users/{id}:
+    delete:
+      summary: Delete a user by id
+      operationId: deleteUserById
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >
+            Deletes the user with no check that the caller has the
+            admin role (Broken Function-Level Authorization).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Missing/invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
