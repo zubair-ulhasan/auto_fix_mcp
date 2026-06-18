@@ -94,18 +94,19 @@ app.put('/notes/:id', (req, res) => {
 });
 
 // --- Admin routes ---
-// VULN 3: Broken Function-Level Authorization — no role === 'admin' check.
-// VULN 4 (also applies here): returns raw user objects including passwords.
+// VULN 4 (still applies here): returns raw user objects including passwords.
 
 app.get('/admin/users', (req, res) => {
   const user = decodeToken(req);
   if (!user) return res.status(401).json({ error: 'unauthenticated' });
+  if (user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
   res.json(users);
 });
 
 app.delete('/admin/users/:id', (req, res) => {
   const user = decodeToken(req);
   if (!user) return res.status(401).json({ error: 'unauthenticated' });
+  if (user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
   const idx = users.findIndex((u) => u.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not found' });
   const [removed] = users.splice(idx, 1);

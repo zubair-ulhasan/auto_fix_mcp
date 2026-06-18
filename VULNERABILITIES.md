@@ -53,21 +53,24 @@ curl -s http://localhost:3000/notes/n2 -H 'Authorization: Bearer dTE='
 
 ---
 
-## 3. API5:2023 Broken Function Level Authorization
+## 3. API5:2023 Broken Function Level Authorization — FIXED
 
 **Where:** `GET /admin/users`, `DELETE /admin/users/:id` in [index.js](index.js)
 
-**What's wrong:** These routes only check that *some* valid token was
-presented — never that `user.role === 'admin'`. Any logged-in non-admin can
-call them.
+**What was wrong:** These routes only checked that *some* valid token was
+presented — never that `user.role === 'admin'`. Any logged-in non-admin
+could call them.
 
-**Reproduce — alice (role `user`) lists and deletes users:**
+**Fix:** Both routes now reject any authenticated user whose `role` isn't
+`admin` with `403 Forbidden`.
+
+**Previously reproduced with — alice (role `user`) lists and deletes users:**
 ```sh
 curl -s http://localhost:3000/admin/users -H 'Authorization: Bearer dTE='
-# => 200 OK, full user list including plaintext passwords
+# => now 403 Forbidden
 
 curl -s -X DELETE http://localhost:3000/admin/users/u2 -H 'Authorization: Bearer dTE='
-# => 200 OK, alice deletes bob's account
+# => now 403 Forbidden
 ```
 
 ---
