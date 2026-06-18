@@ -122,6 +122,10 @@ app.get('/VULNERABILITIES.md', (req, res) => {
   res.sendFile(path.join(__dirname, 'VULNERABILITIES.md'));
 });
 
+app.get('/openapi.yaml', (req, res) => {
+  res.sendFile(path.join(__dirname, 'openapi.yaml'));
+});
+
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });
