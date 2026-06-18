@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>auto_fix_mcp — vulnerable test app</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; }
+  section { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  h2 { font-size: 1rem; margin-top: 0; }
+  button { margin: 0.2rem 0.3rem 0.2rem 0; padding: 0.4rem 0.7rem; cursor: pointer; }
+  input { padding: 0.3rem; margin: 0.2rem 0.3rem 0.2rem 0; }
+  pre { background: #f5f5f5; padding: 0.6rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+  .token { font-family: monospace; background: #f5f5f5; padding: 0.2rem 0.4rem; }
+</style>
+</head>
+<body>
+<h1>auto_fix_mcp — deliberately vulnerable test app</h1>
+<p>See <a href="/VULNERABILITIES.md">VULNERABILITIES.md</a> for the full writeup. Every button below fires a real
+<code>fetch()</code> call — open DevTools → Network to watch the requests.</p>
+
+<p>Current token: <span id="currentToken" class="token">(none)</span></p>
+
+<section>
+  <h2>1. Broken Authentication — login (legit) or forge a token</h2>
+  <button onclick="login('alice','alice123')">Login as alice</button>
+  <button onclick="login('bob','bob123')">Login as bob</button>
+  <button onclick="login('admin','admin123')">Login as admin</button>
+  <br />
+  <input id="forgeUserId" value="u2" placeholder="user id e.g. u2" />
+  <button onclick="forgeToken()">Forge token (no password needed)</button>
+</section>
+
+<section>
+  <h2>2. Excessive Data Exposure — list my notes (raw objects incl. ownerId)</h2>
+  <button onclick="call('GET', '/notes')">GET /notes</button>
+</section>
+
+<section>
+  <h2>3. BOLA / IDOR — fetch any note by id, no ownership check</h2>
+  <input id="noteIdInput" value="n2" placeholder="note id e.g. n2" />
+  <button onclick="call('GET', '/notes/' + document.getElementById('noteIdInput').value)">GET /notes/:id</button>
+</section>
+
+<section>
+  <h2>4. Mass Assignment — overwrite a note's ownerId via PUT</h2>
+  <button onclick="call('PUT', '/notes/n1', { title: 'hijacked', ownerId: 'u2' })">
+    PUT /notes/n1 { ownerId: 'u2' }
+  </button>
+</section>
+
+<section>
+  <h2>5. Broken Function-Level Authorization — admin routes, no role check</h2>
+  <button onclick="call('GET', '/admin/users')">GET /admin/users</button>
+  <button onclick="call('DELETE', '/admin/users/u2')">DELETE /admin/users/u2</button>
+</section>
+
+<h2>Response</h2>
+<pre id="output">(nothing yet)</pre>
+
+<script>
+let currentToken = null;
+
+function setToken(token) {
+  currentToken = token;
+  document.getElementById('currentToken').textContent = token || '(none)';
+}
+
+function show(label, status, body) {
+  document.getElementById('output').textContent =
+    label + '\n--> HTTP ' + status + '\n' + JSON.stringify(body, null, 2);
+}
+
+async function login(username, password) {
+  const res = await fetch('/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const body = await res.json();
+  if (body.token) setToken(body.token);
+  show('POST /login (' + username + ')', res.status, body);
+}
+
+function forgeToken() {
+  const userId = document.getElementById('forgeUserId').value;
+  const token = btoa(userId);
+  setToken(token);
+  show('Forged token for "' + userId + '" (no password used)', '-', { token });
+}
+
+async function call(method, path, body) {
+  const opts = { method, headers: {} };
+  if (currentToken) opts.headers['Authorization'] = 'Bearer ' + currentToken;
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => null);
+  show(method + ' ' + path, res.status, data);
+}
+</script>
+</body>
+</html>

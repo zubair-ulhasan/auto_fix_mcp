@@ -1,7 +1,9 @@
 const express = require('express');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
 const port = process.env.PORT || 3000;
 
@@ -116,8 +118,8 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.get('/', (req, res) => {
-  res.type('text/plain').send('auto_fix_mcp test service is running');
+app.get('/VULNERABILITIES.md', (req, res) => {
+  res.sendFile(path.join(__dirname, 'VULNERABILITIES.md'));
 });
 
 app.listen(port, () => {
