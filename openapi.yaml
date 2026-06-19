@@ -164,7 +164,7 @@ paths:
       operationId: getOrg
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       responses:
         "200":
           description: >
@@ -180,7 +180,7 @@ paths:
       operationId: updateOrg
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       requestBody:
         required: true
         content:
@@ -201,7 +201,7 @@ paths:
       operationId: getAuditLog
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       responses:
         "200":
           description: Intended for owner/operator only (BFLA + BOLA, Data Leak).
@@ -217,7 +217,7 @@ paths:
       operationId: getApiKeys
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       responses:
         "200":
           description: Intended for owner/operator only (BFLA + BOLA, Excessive Data Exposure).
@@ -233,7 +233,7 @@ paths:
       operationId: getOrgUsers
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       responses:
         "200":
           description: Intended for owner/operator only (BFLA + BOLA, Excessive Data Exposure incl. plaintext password).
@@ -248,8 +248,8 @@ paths:
       operationId: updateUserRole
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
-        - { name: userId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
+        - { name: userId, in: path, required: true, schema: { type: string }, example: "u6" }
       requestBody:
         required: true
         content:
@@ -270,7 +270,7 @@ paths:
       operationId: getConnectors
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       responses:
         "200":
           description: Intended for owner/operator/developer only (BFLA + BOLA, Excessive Data Exposure).
@@ -286,7 +286,7 @@ paths:
       operationId: getWorkflows
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       responses:
         "200":
           description: Intended for owner/operator/developer only (BFLA + BOLA).
@@ -302,8 +302,8 @@ paths:
       operationId: deployWorkflow
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
-        - { name: workflowId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
+        - { name: workflowId, in: path, required: true, schema: { type: string }, example: "wf_1" }
       responses:
         "200":
           description: Intended for owner/operator/developer only (BFLA + BOLA, Data Integrity).
@@ -319,7 +319,7 @@ paths:
       operationId: getUsage
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       responses:
         "200":
           description: >
@@ -337,7 +337,7 @@ paths:
       operationId: getHubSettings
       security: [{ BearerAuth: [] }]
       parameters:
-        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       responses:
         "200":
           description: Intended for owner/operator only (BFLA + BOLA).
