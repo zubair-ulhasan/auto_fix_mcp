@@ -1,13 +1,13 @@
 openapi: 3.0.3
 info:
-  title: auto_fix_mcp test API
-  version: "1.0.0"
+  title: auto_fix_mcp sandbox API (Fastn-resembling)
+  version: "2.0.0"
   description: >
-    Deliberately vulnerable test API used to validate PerfAI's scan/report
-    pipeline before connecting the MCP auto-fix tool. See
-    VULNERABILITIES.md in the repo for the planted issues and how each one
-    maps to the endpoints below. Seed accounts: alice/alice123 (role
-    user), bob/bob123 (role user), admin/admin123 (role admin).
+    Deliberately vulnerable multi-tenant RBAC sandbox, built to resemble the
+    shape of a real client engagement (2 tenants, 6-role hierarchy, systemic
+    missing role/tenant checks). See VULNERABILITIES.md in the repo for the
+    planted issues and how each one maps to the endpoints below. Seed
+    accounts are documented there too.
 servers:
   - url: https://auto-fix-mcp.onrender.com
     description: Live (Render)
@@ -16,81 +16,111 @@ servers:
 
 components:
   securitySchemes:
-    bearerAuth:
+    BearerAuth:
       type: http
       scheme: bearer
+      bearerFormat: JWT
       description: >
-        Token is unsigned (base64 of the user id, no expiry, no
-        signature) and is intentionally forgeable. See "Broken
-        Authentication" in VULNERABILITIES.md.
+        Real signed JWT obtained from POST /api/v1/auth/login. Signature is
+        verified, but expiry is intentionally ignored server-side (see
+        "Expired Authorization" in VULNERABILITIES.md).
 
   schemas:
+    Org:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        plan: { type: string }
+        billingEmail: { type: string }
+
+    OrgUpdateRequest:
+      type: object
+      description: No field allow-list is enforced (Mass Assignment) — any property is accepted.
+      additionalProperties: true
+
     User:
       type: object
       properties:
-        id:
-          type: string
-        username:
-          type: string
+        id: { type: string }
+        email: { type: string }
         password:
           type: string
           description: Stored and returned in plaintext (intentional vulnerability).
         role:
           type: string
-          enum: [user, admin]
+          enum: [owner, operator, developer, viewer, end_user, customer]
+        orgId: { type: string }
 
-    Note:
+    RoleUpdateRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [owner, operator, developer, viewer, end_user, customer]
+
+    ApiKey:
       type: object
       properties:
-        id:
+        id: { type: string }
+        name: { type: string }
+        secret:
           type: string
-        ownerId:
-          type: string
-        title:
-          type: string
-        body:
-          type: string
-        isPrivate:
-          type: boolean
+          description: Returned in plaintext (Excessive Data Exposure).
+
+    Connector:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string }
+        secret: { type: string }
+
+    Workflow:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        status: { type: string }
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id: { type: string }
+        actor: { type: string }
+        action: { type: string }
+        timestamp: { type: string, format: date-time }
+
+    Usage:
+      type: object
+      properties:
+        apiCalls: { type: integer }
+        storageGB: { type: number }
+        billingPlan: { type: string }
+
+    HubSettings:
+      type: object
+      properties:
+        webhookUrl: { type: string }
+        notifyEmail: { type: string }
 
     LoginRequest:
       type: object
-      required: [username, password]
+      required: [email, password]
       properties:
-        username:
-          type: string
-        password:
-          type: string
+        email: { type: string }
+        password: { type: string }
 
     LoginResponse:
       type: object
       properties:
-        token:
-          type: string
-
-    NoteCreateRequest:
-      type: object
-      properties:
-        title:
-          type: string
-        body:
-          type: string
-        isPrivate:
-          type: boolean
-
-    NoteUpdateRequest:
-      type: object
-      description: >
-        No field allow-list is enforced server-side (Mass Assignment) —
-        any property, including ownerId or isPrivate, is accepted and
-        written directly to the stored note.
-      additionalProperties: true
+        token: { type: string }
 
     Error:
       type: object
       properties:
-        error:
-          type: string
+        error: { type: string }
 
 paths:
   /health:
@@ -105,221 +135,214 @@ paths:
               schema:
                 type: object
                 properties:
-                  status:
-                    type: string
+                  status: { type: string }
 
-  /login:
+  /api/v1/auth/login:
     post:
-      summary: Authenticate and receive a bearer token
+      summary: Authenticate and receive a signed JWT
       operationId: login
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/LoginRequest"
+            schema: { $ref: "#/components/schemas/LoginRequest" }
       responses:
         "200":
           description: Login succeeded
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/LoginResponse"
+              schema: { $ref: "#/components/schemas/LoginResponse" }
         "401":
           description: Invalid credentials
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+              schema: { $ref: "#/components/schemas/Error" }
 
-  /logout:
+  /api/v1/orgs/{orgId}:
     get:
-      summary: Logout (no-op)
-      operationId: logout
-      responses:
-        "200":
-          description: Always succeeds
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-
-  /notes:
-    get:
-      summary: List the current user's notes
-      operationId: listNotes
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: >
-            Returns raw note objects including internal fields such as
-            ownerId (Excessive Data Exposure).
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Note"
-        "401":
-          description: Missing/invalid token
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-    post:
-      summary: Create a note for the current user
-      operationId: createNote
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/NoteCreateRequest"
-      responses:
-        "201":
-          description: Note created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Note"
-        "401":
-          description: Missing/invalid token
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /notes/{id}:
-    get:
-      summary: Fetch a note by id
-      operationId: getNoteById
-      security:
-        - bearerAuth: []
+      summary: Get an org's profile
+      operationId: getOrg
+      security: [{ BearerAuth: [] }]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - { name: orgId, in: path, required: true, schema: { type: string } }
       responses:
         "200":
           description: >
-            Returns the note with no ownership check against the
-            requesting user (BOLA / IDOR).
+            Intended for the org's owner only. No role check, and no check
+            that the caller's own orgId matches this path (BFLA + BOLA).
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Note"
-        "401":
-          description: Missing/invalid token
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "404":
-          description: Note not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+              schema: { $ref: "#/components/schemas/Org" }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     put:
-      summary: Update a note by id
-      operationId: updateNoteById
-      security:
-        - bearerAuth: []
+      summary: Update an org's profile
+      operationId: updateOrg
+      security: [{ BearerAuth: [] }]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - { name: orgId, in: path, required: true, schema: { type: string } }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/NoteUpdateRequest"
+            schema: { $ref: "#/components/schemas/OrgUpdateRequest" }
       responses:
         "200":
-          description: Updated note (Mass Assignment — see schema description above)
+          description: Updated org (Mass Assignment + BFLA + BOLA — see schema description)
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Note"
-        "401":
-          description: Missing/invalid token
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "404":
-          description: Note not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+              schema: { $ref: "#/components/schemas/Org" }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
-  /admin/users:
+  /api/v1/orgs/{orgId}/audit-log:
     get:
-      summary: List all users
-      operationId: listUsers
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: >
-            Returns all users including plaintext passwords, with no
-            check that the caller has the admin role (Broken
-            Function-Level Authorization + Excessive Data Exposure).
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/User"
-        "401":
-          description: Missing/invalid token
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /admin/users/{id}:
-    delete:
-      summary: Delete a user by id
-      operationId: deleteUserById
-      security:
-        - bearerAuth: []
+      summary: List an org's audit log
+      operationId: getAuditLog
+      security: [{ BearerAuth: [] }]
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - { name: orgId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Intended for owner/operator only (BFLA + BOLA, Data Leak).
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/AuditLogEntry" } }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/orgs/{orgId}/api-keys:
+    get:
+      summary: List an org's API keys
+      operationId: getApiKeys
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Intended for owner/operator only (BFLA + BOLA, Excessive Data Exposure).
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ApiKey" } }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/orgs/{orgId}/users:
+    get:
+      summary: List an org's member users
+      operationId: getOrgUsers
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Intended for owner/operator only (BFLA + BOLA, Excessive Data Exposure incl. plaintext password).
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/User" } }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/orgs/{orgId}/users/{userId}/role:
+    put:
+      summary: Change a member's role
+      operationId: updateUserRole
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoleUpdateRequest" }
+      responses:
+        "200":
+          description: Intended for owner only (BFLA + Privilege Escalation — any role can promote any user to owner).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/orgs/{orgId}/connectors:
+    get:
+      summary: List an org's connectors
+      operationId: getConnectors
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Intended for owner/operator/developer only (BFLA + BOLA, Excessive Data Exposure).
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Connector" } }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/orgs/{orgId}/workflows:
+    get:
+      summary: List an org's workflows
+      operationId: getWorkflows
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Intended for owner/operator/developer only (BFLA + BOLA).
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Workflow" } }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/orgs/{orgId}/workflows/{workflowId}/deploy:
+    post:
+      summary: Deploy a workflow
+      operationId: deployWorkflow
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string } }
+        - { name: workflowId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Intended for owner/operator/developer only (BFLA + BOLA, Data Integrity).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/orgs/{orgId}/usage:
+    get:
+      summary: Get an org's usage/billing stats
+      operationId: getUsage
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string } }
       responses:
         "200":
           description: >
-            Deletes the user with no check that the caller has the
-            admin role (Broken Function-Level Authorization).
+            Intended for owner only. Canonical pure-BOLA demo: same role,
+            wrong tenant (no role mismatch needed to exploit). Data Leak.
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "401":
-          description: Missing/invalid token
+              schema: { $ref: "#/components/schemas/Usage" }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/orgs/{orgId}/hub-settings:
+    get:
+      summary: Get an org's hub settings
+      operationId: getHubSettings
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Intended for owner/operator only (BFLA + BOLA).
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "404":
-          description: User not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+              schema: { $ref: "#/components/schemas/HubSettings" }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

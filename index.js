@@ -1,116 +1,122 @@
 const express = require('express');
 const path = require('path');
+const jwt = require('jsonwebtoken');
+const { orgs, users, apiKeys, connectors, workflows, auditLog, usage, hubSettings } = require('./data');
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const port = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'fastn-sandbox-dev-secret';
 
-// --- In-memory data (intentionally insecure: plaintext passwords) ---
-
-const users = [
-  { id: 'u1', username: 'alice', password: 'alice123', role: 'user' },
-  { id: 'u2', username: 'bob', password: 'bob123', role: 'user' },
-  { id: 'u3', username: 'admin', password: 'admin123', role: 'admin' },
-];
-
-const notes = [
-  { id: 'n1', ownerId: 'u1', title: 'Alice private note', body: 'Alice secret stuff', isPrivate: true },
-  { id: 'n2', ownerId: 'u2', title: 'Bob private note', body: 'Bob secret stuff', isPrivate: true },
-  { id: 'n3', ownerId: 'u3', title: 'Admin note', body: 'Admin secret stuff', isPrivate: true },
-];
-
-let nextNoteId = 4;
-
-// --- VULN 1: Broken Authentication ---
-// Plaintext password comparison, unsigned/forgeable "token" (just base64 of
-// the user id), no expiry, no rate limiting on attempts.
-function decodeToken(req) {
+// --- VULN: Expired Authorization ---
+// Signature is genuinely verified (tokens can't be forged without valid
+// credentials), but expiry is explicitly ignored, so an expired-but-
+// previously-valid token is accepted forever.
+function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.replace(/^Bearer\s+/i, '');
-  if (!token) return null;
-  let userId;
+  if (!token) return res.status(401).json({ error: 'unauthenticated' });
   try {
-    userId = Buffer.from(token, 'base64').toString('utf8');
+    const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true });
+    req.user = decoded;
+    next();
   } catch {
-    return null;
+    return res.status(401).json({ error: 'invalid token' });
   }
-  return users.find((u) => u.id === userId) || null;
 }
 
-app.post('/login', (req, res) => {
-  const { username, password } = req.body || {};
-  const user = users.find((u) => u.username === username && u.password === password);
-  if (!user) {
-    return res.status(401).json({ error: 'invalid credentials' });
-  }
-  const token = Buffer.from(user.id).toString('base64');
+// --- VULN: Broken Function-Level Authorization (BFLA) + Broken Object
+// Level Authorization (BOLA) ---
+// None of the routes below check req.user.role against the route's
+// intended access, nor req.user.orgId against the :orgId in the path.
+// Any authenticated user, in any org, with any role, can call any route.
+
+app.post('/api/v1/auth/login', (req, res) => {
+  const { email, password } = req.body || {};
+  const user = users.find((u) => u.email === email && u.password === password);
+  if (!user) return res.status(401).json({ error: 'invalid credentials' });
+  const token = jwt.sign(
+    { sub: user.id, email: user.email, role: user.role, orgId: user.orgId },
+    JWT_SECRET,
+    { expiresIn: '1h' }
+  );
   res.json({ token });
 });
 
-app.get('/logout', (req, res) => {
-  res.json({ ok: true });
+app.get('/api/v1/orgs/:orgId', requireAuth, (req, res) => {
+  const org = orgs.find((o) => o.id === req.params.orgId);
+  if (!org) return res.status(404).json({ error: 'not found' });
+  res.json(org);
 });
 
-// --- Notes routes ---
-
-app.post('/notes', (req, res) => {
-  const user = decodeToken(req);
-  if (!user) return res.status(401).json({ error: 'unauthenticated' });
-  const { title, body, isPrivate } = req.body || {};
-  const note = { id: `n${nextNoteId++}`, ownerId: user.id, title, body, isPrivate: !!isPrivate };
-  notes.push(note);
-  res.status(201).json(note);
+// VULN: Mass Assignment — blindly applies the whole request body.
+app.put('/api/v1/orgs/:orgId', requireAuth, (req, res) => {
+  const org = orgs.find((o) => o.id === req.params.orgId);
+  if (!org) return res.status(404).json({ error: 'not found' });
+  Object.assign(org, req.body);
+  res.json(org);
 });
 
-// VULN 4: Excessive Data Exposure — returns raw note objects (ownerId, etc.)
-// instead of a filtered DTO.
-app.get('/notes', (req, res) => {
-  const user = decodeToken(req);
-  if (!user) return res.status(401).json({ error: 'unauthenticated' });
-  const mine = notes.filter((n) => n.ownerId === user.id);
-  res.json(mine);
+app.get('/api/v1/orgs/:orgId/audit-log', requireAuth, (req, res) => {
+  const entries = auditLog[req.params.orgId];
+  if (!entries) return res.status(404).json({ error: 'not found' });
+  res.json(entries);
 });
 
-// VULN 2: BOLA / IDOR — no check that note.ownerId matches the requester.
-app.get('/notes/:id', (req, res) => {
-  const user = decodeToken(req);
-  if (!user) return res.status(401).json({ error: 'unauthenticated' });
-  const note = notes.find((n) => n.id === req.params.id);
-  if (!note) return res.status(404).json({ error: 'not found' });
-  res.json(note);
+// VULN: Excessive Data Exposure — returns raw key objects incl. secret value.
+app.get('/api/v1/orgs/:orgId/api-keys', requireAuth, (req, res) => {
+  const keys = apiKeys[req.params.orgId];
+  if (!keys) return res.status(404).json({ error: 'not found' });
+  res.json(keys);
 });
 
-// VULN 5: Mass Assignment — blindly applies the whole request body onto the
-// stored object, so a client can overwrite ownerId/isPrivate/id.
-app.put('/notes/:id', (req, res) => {
-  const user = decodeToken(req);
-  if (!user) return res.status(401).json({ error: 'unauthenticated' });
-  const note = notes.find((n) => n.id === req.params.id);
-  if (!note) return res.status(404).json({ error: 'not found' });
-  Object.assign(note, req.body);
-  res.json(note);
+// VULN: Excessive Data Exposure — returns raw user objects incl. password.
+app.get('/api/v1/orgs/:orgId/users', requireAuth, (req, res) => {
+  const members = users.filter((u) => u.orgId === req.params.orgId);
+  res.json(members);
 });
 
-// --- Admin routes ---
-// VULN 4 (still applies here): returns raw user objects including passwords.
-
-app.get('/admin/users', (req, res) => {
-  const user = decodeToken(req);
-  if (!user) return res.status(401).json({ error: 'unauthenticated' });
-  if (user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
-  res.json(users);
+// VULN: Privilege Escalation — any role can promote any user to any role,
+// including 'owner'.
+app.put('/api/v1/orgs/:orgId/users/:userId/role', requireAuth, (req, res) => {
+  const member = users.find((u) => u.orgId === req.params.orgId && u.id === req.params.userId);
+  if (!member) return res.status(404).json({ error: 'not found' });
+  member.role = req.body && req.body.role;
+  res.json(member);
 });
 
-app.delete('/admin/users/:id', (req, res) => {
-  const user = decodeToken(req);
-  if (!user) return res.status(401).json({ error: 'unauthenticated' });
-  if (user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
-  const idx = users.findIndex((u) => u.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'not found' });
-  const [removed] = users.splice(idx, 1);
-  res.json(removed);
+app.get('/api/v1/orgs/:orgId/connectors', requireAuth, (req, res) => {
+  const list = connectors[req.params.orgId];
+  if (!list) return res.status(404).json({ error: 'not found' });
+  res.json(list);
+});
+
+app.get('/api/v1/orgs/:orgId/workflows', requireAuth, (req, res) => {
+  const list = workflows[req.params.orgId];
+  if (!list) return res.status(404).json({ error: 'not found' });
+  res.json(list);
+});
+
+app.post('/api/v1/orgs/:orgId/workflows/:workflowId/deploy', requireAuth, (req, res) => {
+  const list = workflows[req.params.orgId] || [];
+  const wf = list.find((w) => w.id === req.params.workflowId);
+  if (!wf) return res.status(404).json({ error: 'not found' });
+  wf.status = 'deployed';
+  res.json(wf);
+});
+
+app.get('/api/v1/orgs/:orgId/usage', requireAuth, (req, res) => {
+  const stats = usage[req.params.orgId];
+  if (!stats) return res.status(404).json({ error: 'not found' });
+  res.json(stats);
+});
+
+app.get('/api/v1/orgs/:orgId/hub-settings', requireAuth, (req, res) => {
+  const settings = hubSettings[req.params.orgId];
+  if (!settings) return res.status(404).json({ error: 'not found' });
+  res.json(settings);
 });
 
 // --- Baseline routes (unchanged) ---
