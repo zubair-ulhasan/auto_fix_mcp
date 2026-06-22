@@ -171,7 +171,8 @@ app.put('/api/v1/orgs/:orgId/users/:userId/role', requireAuth, requireSameOrg, r
     action: 'user.role_changed',
     timestamp: new Date().toISOString(),
   });
-  res.json(member);
+  const { password, ...safeMember } = member;
+  res.json(safeMember);
 });
 
 app.get('/api/v1/orgs/:orgId/connectors', requireAuth, requireSameOrg, requireRole('owner', 'operator', 'developer'), (req, res) => {
