@@ -41,12 +41,10 @@ components:
 
     User:
       type: object
+      description: Password is stored in plaintext in data.js but never serialized into this response shape (Shadow Data fix).
       properties:
         id: { type: string }
         email: { type: string }
-        password:
-          type: string
-          description: Stored and returned in plaintext (intentional vulnerability).
         role:
           type: string
           enum: [owner, operator, developer, viewer, end_user, customer]
@@ -148,7 +146,10 @@ paths:
             schema: { $ref: "#/components/schemas/LoginRequest" }
       responses:
         "200":
-          description: Login succeeded
+          description: >
+            Login succeeded. Token is RS256-signed, 15-minute expiry, with
+            iss/aud/jti claims (Weak Authorization + Missing Token
+            Issuer/Audience Claim fixes).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LoginResponse" }
@@ -157,6 +158,19 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke the caller's current token
+      operationId: logout
+      security: [{ BearerAuth: [] }]
+      responses:
+        "200":
+          description: Token's jti added to the in-memory revocation list (Missing Token Revocation fix).
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string } } }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}:
     get:
@@ -168,12 +182,13 @@ paths:
       responses:
         "200":
           description: >
-            Intended for the org's owner only. No role check, and no check
-            that the caller's own orgId matches this path (BFLA + BOLA).
+            Owner-only, same-org-only (FIXED — BFLA + BOLA). 403 on role or
+            tenant mismatch.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Org" }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     put:
       summary: Update an org's profile
@@ -188,11 +203,15 @@ paths:
             schema: { $ref: "#/components/schemas/OrgUpdateRequest" }
       responses:
         "200":
-          description: Updated org (Mass Assignment + BFLA + BOLA — see schema description)
+          description: >
+            Owner-only, same-org-only (FIXED — BFLA + BOLA). Mass Assignment
+            on the request body itself remains planted — see
+            VULNERABILITIES.md.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Org" }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}/audit-log:
@@ -202,13 +221,16 @@ paths:
       security: [{ BearerAuth: [] }]
       parameters:
         - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
       responses:
         "200":
-          description: Intended for owner/operator only (BFLA + BOLA, Data Leak).
+          description: Owner/operator-only, same-org-only, paginated (FIXED — BFLA + BOLA + Pagination Missing).
           content:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/AuditLogEntry" } }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}/api-keys:
@@ -218,13 +240,16 @@ paths:
       security: [{ BearerAuth: [] }]
       parameters:
         - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
       responses:
         "200":
-          description: Intended for owner/operator only (BFLA + BOLA, Excessive Data Exposure).
+          description: Owner/operator-only, same-org-only, paginated (FIXED — BFLA + BOLA + Pagination Missing).
           content:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/ApiKey" } }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}/users:
@@ -234,13 +259,18 @@ paths:
       security: [{ BearerAuth: [] }]
       parameters:
         - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
       responses:
         "200":
-          description: Intended for owner/operator only (BFLA + BOLA, Excessive Data Exposure incl. plaintext password).
+          description: >
+            Owner/operator-only, same-org-only, paginated, password stripped
+            (FIXED — BFLA + BOLA + Shadow Data + Pagination Missing).
           content:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/User" } }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}/users/{userId}/role:
     put:
@@ -257,11 +287,16 @@ paths:
             schema: { $ref: "#/components/schemas/RoleUpdateRequest" }
       responses:
         "200":
-          description: Intended for owner only (BFLA + Privilege Escalation — any role can promote any user to owner).
+          description: >
+            Owner-only, same-org-only, change is appended to the org's audit
+            log (FIXED — BFLA + Privilege Escalation + Business Audit Data
+            Tampering + Cost Evasion).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
+        "400": { description: Invalid role value, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}/connectors:
@@ -271,13 +306,16 @@ paths:
       security: [{ BearerAuth: [] }]
       parameters:
         - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
       responses:
         "200":
-          description: Intended for owner/operator/developer only (BFLA + BOLA, Excessive Data Exposure).
+          description: Owner/operator/developer-only, same-org-only, paginated (FIXED — BFLA + BOLA + Pagination Missing).
           content:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/Connector" } }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}/workflows:
@@ -287,13 +325,16 @@ paths:
       security: [{ BearerAuth: [] }]
       parameters:
         - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
       responses:
         "200":
-          description: Intended for owner/operator/developer only (BFLA + BOLA).
+          description: Owner/operator/developer-only, same-org-only, paginated (FIXED — BFLA + BOLA + Pagination Missing).
           content:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/Workflow" } }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}/workflows/{workflowId}/deploy:
@@ -306,11 +347,12 @@ paths:
         - { name: workflowId, in: path, required: true, schema: { type: string }, example: "wf_1" }
       responses:
         "200":
-          description: Intended for owner/operator/developer only (BFLA + BOLA, Data Integrity).
+          description: Owner/operator/developer-only, same-org-only (FIXED — BFLA + BOLA).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Workflow" }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}/usage:
@@ -323,12 +365,13 @@ paths:
       responses:
         "200":
           description: >
-            Intended for owner only. Canonical pure-BOLA demo: same role,
-            wrong tenant (no role mismatch needed to exploit). Data Leak.
+            Owner-only, same-org-only (FIXED — was the canonical pure-BOLA
+            demo: same role, wrong tenant).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Usage" }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/orgs/{orgId}/hub-settings:
@@ -340,9 +383,10 @@ paths:
         - { name: orgId, in: path, required: true, schema: { type: string }, example: "org_1" }
       responses:
         "200":
-          description: Intended for owner/operator only (BFLA + BOLA).
+          description: Owner/operator-only, same-org-only (FIXED — BFLA + BOLA).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HubSettings" }
         "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong role or wrong tenant, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

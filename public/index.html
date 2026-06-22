@@ -18,7 +18,7 @@
 <body>
 <h1>auto_fix_mcp — Fastn-resembling sandbox</h1>
 <p>See <a href="/VULNERABILITIES.md">VULNERABILITIES.md</a>. Every button fires a real <code>fetch()</code> —
-open DevTools → Network to watch requests. Tokens are real signed JWTs (HS256).</p>
+open DevTools → Network to watch requests. Tokens are real signed JWTs (RS256).</p>
 
 <p>Current token (role / org): <span id="currentToken" class="token">(none)</span></p>
 
@@ -57,7 +57,7 @@ open DevTools → Network to watch requests. Tokens are real signed JWTs (HS256)
 </section>
 
 <section>
-  <h2>4. Privilege Escalation — promote any user to owner</h2>
+  <h2>4. Privilege Escalation (FIXED — now owner-only, same-org-only)</h2>
   User id: <input id="userId" value="u6" />
   <button onclick="call('PUT', '/api/v1/orgs/' + orgIdVal() + '/users/' + document.getElementById('userId').value + '/role', { role: 'owner' })">
     PUT .../users/:userId/role { role: 'owner' }
@@ -65,7 +65,7 @@ open DevTools → Network to watch requests. Tokens are real signed JWTs (HS256)
 </section>
 
 <section>
-  <h2>5. Workflow deploy (any role, any org)</h2>
+  <h2>5. Workflow deploy (FIXED — now owner/operator/developer, same-org-only)</h2>
   Workflow id: <input id="workflowId" value="wf_1" />
   <button onclick="call('POST', '/api/v1/orgs/' + orgIdVal() + '/workflows/' + document.getElementById('workflowId').value + '/deploy')">
     POST .../workflows/:id/deploy
