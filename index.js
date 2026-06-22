@@ -73,7 +73,7 @@ function requireRole(...allowedRoles) {
 
 // --- Global rate limiting (fixed window per IP) ---
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX = 100;
+const RATE_LIMIT_MAX = 1000;
 const rateLimitHits = new Map();
 
 function rateLimit(req, res, next) {
