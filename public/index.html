@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>auto_fix_mcp — deliberately vulnerable sandbox</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; }
+  section { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  h2 { font-size: 1rem; margin-top: 0; }
+  button { margin: 0.2rem 0.3rem 0.2rem 0; padding: 0.4rem 0.7rem; cursor: pointer; }
+  input { padding: 0.3rem; margin: 0.2rem 0.3rem 0.2rem 0; width: 7rem; }
+  pre { background: #f5f5f5; padding: 0.6rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+  .token { font-family: monospace; background: #f5f5f5; padding: 0.2rem 0.4rem; word-break: break-all; }
+  .row { margin-bottom: 0.4rem; }
+</style>
+</head>
+<body>
+<h1>auto_fix_mcp — deliberately vulnerable sandbox</h1>
+
+<nav style="margin: 0.75rem 0; padding: 0.6rem; border: 1px solid #ccc; border-radius: 8px;">
+  <a href="https://www.facebook.com/creativecommons" target="_blank" rel="noopener noreferrer">Facebook</a>
+  &nbsp;·&nbsp;
+  <a href="https://www.linkedin.com/company/creativecommons/" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+  &nbsp;·&nbsp;
+  <a href="https://x.com/creativecommons" target="_blank" rel="noopener noreferrer">Twitter / X</a>
+  &nbsp;·&nbsp;
+  <a href="https://en.wikipedia.org/wiki/Creative_Commons" target="_blank" rel="noopener noreferrer">Wikipedia</a>
+  &nbsp;·&nbsp;
+  <a href="https://creativecommons.org/" target="_blank" rel="noopener noreferrer">General site</a>
+</nav>
+
+<p>See <a href="/VULNERABILITIES.md">VULNERABILITIES.md</a>. Every button fires a real <code>fetch()</code> —
+open DevTools → Network to watch requests. Tokens are real signed JWTs (HS256).</p>
+
+<p>Current token (role / org): <span id="currentToken" class="token">(none)</span></p>
+
+<section>
+  <h2>1. Login — pick any seeded account</h2>
+  <button onclick="login('owner@account1.test','owner123')">Account 1 Owner</button>
+  <button onclick="login('operator@account1.test','operator123')">Account 1 Operator</button>
+  <button onclick="login('developer@account1.test','developer123')">Account 1 Developer</button>
+  <button onclick="login('viewer@account1.test','viewer123')">Account 1 Viewer</button>
+  <button onclick="login('enduser@account1.test','enduser123')">Account 1 End User</button>
+  <button onclick="login('customer@account1.test','customer123')">Account 1 Customer</button>
+  <br />
+  <button onclick="login('owner@account2.test','owner123')">Account 2 Owner</button>
+</section>
+
+<section>
+  <h2>2. Org-scoped reads — try with org_1 or org_2, any logged-in role</h2>
+  <div class="row">
+    Org id: <input id="orgId" value="org_1" />
+    <button onclick="call('GET', '/api/v1/orgs/' + orgIdVal())">GET /orgs/:orgId</button>
+    <button onclick="call('GET', '/api/v1/orgs/' + orgIdVal() + '/audit-log')">GET .../audit-log</button>
+    <button onclick="call('GET', '/api/v1/orgs/' + orgIdVal() + '/api-keys')">GET .../api-keys</button>
+    <button onclick="call('GET', '/api/v1/orgs/' + orgIdVal() + '/users')">GET .../users</button>
+    <button onclick="call('GET', '/api/v1/orgs/' + orgIdVal() + '/connectors')">GET .../connectors</button>
+    <button onclick="call('GET', '/api/v1/orgs/' + orgIdVal() + '/workflows')">GET .../workflows</button>
+    <button onclick="call('GET', '/api/v1/orgs/' + orgIdVal() + '/usage')">GET .../usage (pure BOLA demo)</button>
+    <button onclick="call('GET', '/api/v1/orgs/' + orgIdVal() + '/hub-settings')">GET .../hub-settings</button>
+  </div>
+</section>
+
+<section>
+  <h2>3. Mass Assignment — overwrite org fields via PUT</h2>
+  <button onclick="call('PUT', '/api/v1/orgs/' + orgIdVal(), { name: 'hijacked', plan: 'enterprise' })">
+    PUT /orgs/:orgId { plan: 'enterprise' }
+  </button>
+</section>
+
+<section>
+  <h2>4. Privilege Escalation — promote any user to owner</h2>
+  User id: <input id="userId" value="u6" />
+  <button onclick="call('PUT', '/api/v1/orgs/' + orgIdVal() + '/users/' + document.getElementById('userId').value + '/role', { role: 'owner' })">
+    PUT .../users/:userId/role { role: 'owner' }
+  </button>
+</section>
+
+<section>
+  <h2>5. Workflow deploy (any role, any org)</h2>
+  Workflow id: <input id="workflowId" value="wf_1" />
+  <button onclick="call('POST', '/api/v1/orgs/' + orgIdVal() + '/workflows/' + document.getElementById('workflowId').value + '/deploy')">
+    POST .../workflows/:id/deploy
+  </button>
+</section>
+
+<h2>Response</h2>
+<pre id="output">(nothing yet)</pre>
+
+<script>
+let currentToken = null;
+
+function orgIdVal() {
+  return document.getElementById('orgId').value;
+}
+
+function setToken(token) {
+  currentToken = token;
+  if (!token) {
+    document.getElementById('currentToken').textContent = '(none)';
+    return;
+  }
+  const payload = JSON.parse(atob(token.split('.')[1]));
+  document.getElementById('currentToken').textContent =
+    payload.role + ' / ' + payload.orgId + ' — ' + token.slice(0, 24) + '...';
+}
+
+function show(label, status, body) {
+  document.getElementById('output').textContent =
+    label + '\n--> HTTP ' + status + '\n' + JSON.stringify(body, null, 2);
+}
+
+async function login(email, password) {
+  const res = await fetch('/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const body = await res.json();
+  if (body.token) setToken(body.token);
+  show('POST /api/v1/auth/login (' + email + ')', res.status, body);
+}
+
+async function call(method, path, body) {
+  const opts = { method, headers: {} };
+  if (currentToken) opts.headers['Authorization'] = 'Bearer ' + currentToken;
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => null);
+  show(method + ' ' + path, res.status, data);
+}
+</script>
+
+</body>
+</html>
